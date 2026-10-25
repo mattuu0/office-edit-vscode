@@ -1,0 +1,92 @@
+{
+  "name": "office-edit",
+  "displayName": "Office Edit",
+  "description": "Word / Excel / PowerPoint / PDF を VS Code 内でローカルに表示・編集する",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "workspaces": [
+    "packages/*"
+  ],
+  "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "officeEdit.office",
+        "displayName": "Office Edit: Office",
+        "priority": "default",
+        "selector": [
+          {
+            "filenamePattern": "*.docx"
+          },
+          {
+            "filenamePattern": "*.xlsx"
+          },
+          {
+            "filenamePattern": "*.pptx"
+          }
+        ]
+      },
+      {
+        "viewType": "officeEdit.pdf",
+        "displayName": "Office Edit: PDF",
+        "priority": "default",
+        "selector": [
+          {
+            "filenamePattern": "*.pdf"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "officeEdit.about",
+        "title": "Office Edit: About (Powered by ibisOffice)"
+      },
+      {
+        "command": "officeEdit.setAsDefault",
+        "title": "Office Edit: Set as Default Viewer (docx/xlsx/pptx/pdf)"
+      },
+      {
+        "command": "officeEdit.resetDefault",
+        "title": "Office Edit: Reset Default Viewer Settings"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:ibis": "scripts/build-ibis.sh",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json",
+    "package": "npm run build && vsce package"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

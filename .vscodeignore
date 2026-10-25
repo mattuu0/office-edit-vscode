@@ -1,0 +1,7 @@
+**
+!dist/extension.js
+!dist/webview/**
+!package.json
+!readme.md
+!LICENSE
+!licenses/**

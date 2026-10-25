@@ -1,0 +1,7 @@
+node_modules
+dist
+*.vsix
+*.tsbuildinfo
+vendor/ibis-office/target
+vendor/ibis-office/node_modules
+samples/

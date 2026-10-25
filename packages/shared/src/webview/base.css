@@ -1,0 +1,7 @@
+@import 'tailwindcss';
+
+body {
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  font-family: var(--vscode-font-family);
+}

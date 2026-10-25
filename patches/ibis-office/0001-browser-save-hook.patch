@@ -1,0 +1,252 @@
+diff --git a/crates/ibis-doc-model/src/command.rs b/crates/ibis-doc-model/src/command.rs
+index 2649731..0958ef5 100644
+--- a/crates/ibis-doc-model/src/command.rs
++++ b/crates/ibis-doc-model/src/command.rs
+@@ -1007,11 +1007,17 @@ pub struct Document {
+     /// The file this document is saved as (its whole path), for what the calculation says of it
+     /// (`CELL("filename")`).
+     file: Option<String>,
++    /// Counts every change made by an edit, undo or redo (a host page compares it with the one saved).
++    revision: u64,
+ }
+ 
+ impl Document {
+     pub fn new(presentation: Presentation) -> Self {
+-        Self { presentation, undo: Vec::new(), redo: Vec::new(), file: None }
++        Self { presentation, undo: Vec::new(), redo: Vec::new(), file: None, revision: 0 }
++    }
++
++    pub fn revision(&self) -> u64 {
++        self.revision
+     }
+ 
+     /// Tell the document which file it is (`None`: not saved yet).
+@@ -1047,6 +1053,7 @@ impl Document {
+         if !inverses.is_empty() {
+             self.undo.push(inverses);
+             self.redo.clear();
++            self.revision += 1;
+         }
+         Ok(())
+     }
+@@ -1067,6 +1074,7 @@ impl Document {
+             None => self.undo.push(inverses),
+         }
+         self.redo.clear();
++        self.revision += 1;
+         Ok(())
+     }
+ 
+@@ -1074,6 +1082,7 @@ impl Document {
+     /// user abandoned (such as a new text box left empty).
+     pub fn retract_last(&mut self) -> bool {
+         let Some(step) = self.undo.pop() else { return false };
++        self.revision += 1;
+         self.apply_all(step).is_ok()
+     }
+ 
+@@ -1082,6 +1091,7 @@ impl Document {
+         match self.apply_all(step) {
+             Ok(inverses) => {
+                 self.redo.push(inverses);
++                self.revision += 1;
+                 true
+             }
+             Err(_) => false,
+@@ -1093,6 +1103,7 @@ impl Document {
+         match self.apply_all(step) {
+             Ok(inverses) => {
+                 self.undo.push(inverses);
++                self.revision += 1;
+                 true
+             }
+             Err(_) => false,
+diff --git a/crates/ibis-office-app/src/lib.rs b/crates/ibis-office-app/src/lib.rs
+index d222958..3a21b75 100644
+--- a/crates/ibis-office-app/src/lib.rs
++++ b/crates/ibis-office-app/src/lib.rs
+@@ -1002,8 +1002,9 @@ mod web {
+     /// cannot be read) the editor shows the start view.
+     #[wasm_bindgen]
+     pub fn run(asset_base: Option<String>, file_name: Option<String>, file: Option<Vec<u8>>) -> Result<(), JsValue> {
+-        let document = file.and_then(|data| match ibis_pptx::read(&data) {
+-            Ok(presentation) => Some((presentation, file_name.unwrap_or_default().into())),
++        // `open`, not `read`: the source is kept so that saving can write the file back.
++        let document = file.and_then(|data| match ibis_pptx::open(data) {
++            Ok(opened) => Some((opened.presentation, SharedString::from(file_name.unwrap_or_default()), opened.source)),
+             Err(err) => {
+                 log::error!("{err}");
+                 None
+@@ -1041,7 +1042,14 @@ mod web {
+                 .expect("failed to load the UI font");
+             super::init(cx);
+             Theme::global_mut(cx).font_family = "IBM Plex Sans".into();
+-            super::open_editor(document, None, cx);
++            match document {
++                Some((presentation, name, source)) => super::open_window_with(cx, move |editor, window, cx| {
++                    editor.load(presentation, name, window, cx);
++                    editor.source = Some(Arc::new(source));
++                    watch_host(window, cx);
++                }),
++                None => super::open_editor(None, None, cx),
++            }
+         });
+         APPLICATION.with(|app| *app.borrow_mut() = Some(handle));
+         Ok(())
+@@ -1069,6 +1077,51 @@ mod web {
+         fn pick_file_js() -> Result<js_sys::Promise, JsValue>;
+     }
+ 
++    #[wasm_bindgen]
++    extern "C" {
++        /// Hook defined by the page (not by upstream's `www/main.ts`): takes
++        /// `(name, bytes, saveAs)` and resolves once the file is written.
++        #[wasm_bindgen(catch, js_name = ibisOfficeSaveFile)]
++        fn save_file_js(name: &str, bytes: &[u8], save_as: bool) -> Result<js_sys::Promise, JsValue>;
++    }
++
++    #[wasm_bindgen]
++    extern "C" {
++        /// Hook defined by the page: called with whether the document differs from the saved one.
++        #[wasm_bindgen(catch, js_name = ibisOfficeDirtyChanged)]
++        fn dirty_changed_js(dirty: bool) -> Result<(), JsValue>;
++        /// Hook defined by the page: whether the page asked for a save since the last call.
++        #[wasm_bindgen(catch, js_name = ibisOfficeTakeSaveRequest)]
++        fn take_save_request_js() -> Result<bool, JsValue>;
++    }
++
++    /// Tell the page when the document gets (un)saved edits, and save when the page asks to.
++    pub(crate) fn watch_host(window: &mut gpui_kit::Window, cx: &mut gpui_kit::Context<crate::shell::editor::SlideEditor>) {
++        cx.spawn_in(window, async move |this, cx| {
++            let mut last = false;
++            loop {
++                cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
++                let Ok(dirty) = this.update(cx, |this, _| this.document.revision() != this.saved_revision) else { return };
++                if dirty != last {
++                    last = dirty;
++                    let _ = dirty_changed_js(dirty);
++                }
++                if take_save_request_js().unwrap_or(false) {
++                    this.update_in(cx, |this, window, cx| this.save(&crate::Save, window, cx)).ok();
++                }
++            }
++        })
++        .detach();
++    }
++
++    /// Hand the saved file to the page's `ibisOfficeSaveFile` hook.
++    pub(crate) async fn save_file(name: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
++        let describe = |err: JsValue| err.as_string().unwrap_or_else(|| format!("{err:?}"));
++        let promise = save_file_js(name, bytes, save_as).map_err(describe)?;
++        wasm_bindgen_futures::JsFuture::from(promise).await.map_err(describe)?;
++        Ok(())
++    }
++
+     /// Let the user choose a file; its name and contents, or `None` if cancelled.
+     pub(crate) async fn pick_file() -> Result<Option<(String, Vec<u8>)>, String> {
+         let describe = |err: JsValue| err.as_string().unwrap_or_else(|| format!("{err:?}"));
+diff --git a/crates/ibis-office-app/src/shell/editor.rs b/crates/ibis-office-app/src/shell/editor.rs
+index 87e775d..5977bd8 100644
+--- a/crates/ibis-office-app/src/shell/editor.rs
++++ b/crates/ibis-office-app/src/shell/editor.rs
+@@ -460,6 +460,8 @@ pub struct SlideEditor {
+     /// Where the open file came from, for saving it (`shell/save.rs`);
+     /// `None` for a new document or one that cannot be saved.
+     pub(crate) source: Option<std::sync::Arc<ibis_pptx::Source>>,
++    /// `Document::revision` at the last save (the browser build tells its page whether they differ).
++    pub(crate) saved_revision: u64,
+     /// スライド マスター表示, while it is open.
+     pub(crate) master_view: Option<crate::pptx::master_view::MasterView>,
+     /// ノートの書式編集, while it is open.
+@@ -630,6 +632,7 @@ impl SlideEditor {
+             reviewer_filter: None,
+             chrome_compact: false,
+             source: None,
++            saved_revision: 0,
+             master_view: None,
+             notes_format: None,
+             #[cfg(not(target_family = "wasm"))]
+diff --git a/crates/ibis-office-app/src/shell/save.rs b/crates/ibis-office-app/src/shell/save.rs
+index 5a70fa5..9ebfcb4 100644
+--- a/crates/ibis-office-app/src/shell/save.rs
++++ b/crates/ibis-office-app/src/shell/save.rs
+@@ -29,11 +29,7 @@ impl SlideEditor {
+             None => self.save_as(&SaveAs, window, cx),
+         }
+         #[cfg(target_family = "wasm")]
+-        {
+-            let _ = window;
+-            self.status = Some(crate::shell::i18n::text("_shell.saving-is-not-yet-available-in-the-browser-versi").into());
+-            cx.notify();
+-        }
++        self.save_via_host(false, window, cx);
+     }
+ 
+     /// ⌘⇧S: ask where, and save there.
+@@ -70,11 +66,54 @@ impl SlideEditor {
+             .detach();
+         }
+         #[cfg(target_family = "wasm")]
+-        {
+-            let _ = window;
+-            self.status = Some(crate::shell::i18n::text("_shell.saving-is-not-yet-available-in-the-browser-versi").into());
+-            cx.notify();
++        self.save_via_host(true, window, cx);
++    }
++
++    /// The browser build has no file system: the saved bytes are handed to the
++    /// page's `ibisOfficeSaveFile` hook (see `web::save_file`), which writes them.
++    #[cfg(target_family = "wasm")]
++    fn save_via_host(&mut self, save_as: bool, window: &mut Window, cx: &mut Context<Self>) {
++        let name = self.file_name.clone().map(|n| n.to_string()).unwrap_or_default();
++        let result = self.encode_for_name(&name);
++        let revision = self.document.revision();
++        match result {
++            Err(err) => self.report_save(Err(err), cx),
++            Ok(bytes) => {
++                cx.spawn_in(window, async move |this, cx| {
++                    let result = crate::web::save_file(&name, &bytes, save_as).await;
++                    this.update_in(cx, |this, _, cx| {
++                        if result.is_ok() {
++                            this.saved_revision = revision;
++                        }
++                        this.report_save(result, cx)
++                    })
++                    .ok();
++                })
++                .detach();
++            }
++        }
++    }
++
++    /// The file as it is now, in the format its name's extension asks for.
++    #[cfg(target_family = "wasm")]
++    fn encode_for_name(&mut self, name: &str) -> Result<Vec<u8>, String> {
++        if self.is_master_view() || self.is_page_view() {
++            return Err(crate::shell::i18n::text("_shell.close-slide-master-view-and-notes-formatting-bef").to_string());
+         }
++        let source = self.source.clone().ok_or(crate::shell::i18n::text("_shell.saving-new-documents-is-not-yet-supported").to_string())?;
++        let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("");
++        let is = |list: &[&str]| list.iter().any(|e| ext.eq_ignore_ascii_case(e));
++        let options = ibis_pptx::SaveOptions::default();
++        let bytes = if (self.is_workbook() && is(&["xltx", "xltm"])) || (self.is_presentation() && ibis_pptx::is_template(ext)) || (self.is_document() && is(&["dotx", "dotm"])) {
++            source.save_template(self.presentation(), options)
++        } else if self.is_presentation() && ibis_pptx::is_slideshow(ext) {
++            source.save_slideshow(self.presentation(), options)
++        } else if self.is_presentation() && is(&["pptx", "pptm"]) {
++            source.save_presentation(self.presentation(), options)
++        } else {
++            source.save(self.presentation(), options)
++        };
++        bytes.map_err(|e| e.to_string())
+     }
+ 
+     /// Save to `path`, and make it the file's path.
+@@ -143,7 +182,6 @@ impl SlideEditor {
+         Ok(())
+     }
+ 
+-    #[cfg(not(target_family = "wasm"))]
+     fn report_save(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+         self.status = Some(match result {
+             Ok(()) => self.save_note.take().unwrap_or_else(|| crate::shell::i18n::text("_shell.saved").into()),

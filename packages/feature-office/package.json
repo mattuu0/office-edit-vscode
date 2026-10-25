@@ -1,0 +1,1 @@
+{ "name": "@office-edit/feature-office", "version": "0.0.1", "private": true, "main": "src/host/index.ts", "dependencies": { "@office-edit/shared": "*" } }

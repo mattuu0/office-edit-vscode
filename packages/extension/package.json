@@ -1,0 +1,11 @@
+{
+  "name": "@office-edit/extension",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/extension.ts",
+  "dependencies": {
+    "@office-edit/shared": "*",
+    "@office-edit/feature-office": "*",
+    "@office-edit/feature-pdf": "*"
+  }
+}
