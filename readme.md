@@ -65,7 +65,7 @@ npm run package      # .vsix を生成
 
 ## ライセンス
 
-このリポジトリは **AGPL-3.0-only** ([LICENSE](LICENSE)) です。配布する場合は、対応するソースも提供してください。
+このリポジトリは **AGPL-3.0-only** ([LICENSE](https://github.com/mattuu0/office-edit-vscode/blob/main/LICENSE)) です。配布する場合は、対応するソースも提供してください。
 
 ### Powered by ibisOffice
 

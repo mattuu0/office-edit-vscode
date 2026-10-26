@@ -6,6 +6,10 @@
   "publisher": "local",
   "private": true,
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mattuu0/office-edit-vscode.git"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
